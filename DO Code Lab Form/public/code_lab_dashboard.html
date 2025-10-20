@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DO Code Lab Questionnaire Dashboard</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Configure Tailwind for Inter Font and DO Code Lab green/dark colors -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        // Deep Forest Green from logo
+                        'cl-green': '#38761D',
+                        // Dark text color
+                        'cl-dark': '#1F2937',
+                        // Light background for options
+                        'cl-light': '#F9FAFB',
+                        // Success color
+                        'cl-success': '#059669',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Set Inter as the primary font and ensure a bright white background */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #ffffff;
+            /* Bright white background */
+            padding: 1rem;
+        }
+
+        /* Custom styling for the main form container to match the form aesthetic */
+        .main-card {
+            border-radius: 1.5rem;
+            /* Smoother, modern corners */
+            border: 1px solid #E5E7EB;
+            /* Light border */
+        }
+
+        /* Style for the main header to match the website's dark, heavy font */
+        .main-header {
+            font-weight: 800;
+            /* Extra bold */
+            color: #1F2937;
+            /* Dark text color */
+        }
+
+        /* Style for data labels */
+        .data-label {
+            font-weight: 600;
+            color: #1F2937;
+            margin-top: 1rem;
+            margin-bottom: 0.25rem;
+            display: block;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="max-w-4xl mx-auto my-8">
+        <!-- Header -->
+        <header class="text-center mb-10">
+            <h1 class="text-3xl sm:text-4xl main-header mb-2">
+                DO Code Lab Submissions
+            </h1>
+            <p class="text-lg text-gray-500">
+                Real-time view of client design and branding questionnaires.
+            </p>
+            <div class="text-sm text-gray-400 mt-2">
+                Authenticated User ID: <span id="user_id_display"
+                    class="font-mono text-xs bg-cl-light p-1 rounded">...</span>
+            </div>
+        </header>
+
+        <!-- Message Box for Feedback/Loading -->
+        <div id="message_box"
+            class="fixed top-4 right-4 z-50 transition-opacity duration-300 opacity-0 pointer-events-none">
+            <div class="p-4 rounded-xl shadow-lg flex items-center space-x-3" role="alert">
+                <svg id="message_icon" class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20"
+                    xmlns="http://www.w3.org/2000/svg">
+                    <!-- Icon will be set via JS -->
+                </svg>
+                <span id="message_text" class="font-medium"></span>
+            </div>
+        </div>
+
+        <!-- Dashboard Content Area -->
+        <div id="dashboard_content" class="space-y-6">
+            <p class="text-center text-gray-500 py-10">Loading submissions...</p>
+        </div>
+
+    </div>
+
+    <script type="module">
+        // --- FIREBASE IMPORTS ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, query, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- FIREBASE CONFIGURATION & INITIALIZATION ---
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db;
+        let auth;
+        let userId = 'anonymous';
+        const COLLECTION_NAME = 'code_lab_design_questionnaires';
+        const contentContainer = document.getElementById('dashboard_content');
+        const userIdDisplay = document.getElementById('user_id_display');
+
+        // Set Firestore log level to Debug for visibility
+        setLogLevel('Debug');
+
+        async function initFirebaseAndAuth() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                userId = auth.currentUser?.uid || 'anonymous-' + crypto.randomUUID();
+                userIdDisplay.textContent = userId;
+                console.log("Firebase initialized. User ID:", userId);
+
+                startListeningForSubmissions();
+
+            } catch (error) {
+                console.error("Firebase initialization or authentication failed:", error);
+                showMessage("Initialization failed. Cannot load data.", 'error');
+                contentContainer.innerHTML = '<p class="text-center text-red-600 py-10">Error loading database. Check console for details.</p>';
+            }
+        }
+
+        // --- DATA FETCHING & REAL-TIME LISTENER ---
+
+        function startListeningForSubmissions() {
+            if (!db) return;
+
+            const collectionPath = `/artifacts/${appId}/users/${userId}/${COLLECTION_NAME}`;
+            const submissionsQuery = query(collection(db, collectionPath));
+
+            console.log("Listening for submissions on:", collectionPath);
+
+            // Real-time listener using onSnapshot
+            onSnapshot(submissionsQuery, (snapshot) => {
+                const submissions = [];
+                snapshot.forEach((doc) => {
+                    submissions.push({ id: doc.id, ...doc.data() });
+                });
+
+                renderSubmissions(submissions);
+
+            }, (error) => {
+                console.error("Error fetching documents:", error);
+                contentContainer.innerHTML = '<p class="text-center text-red-600 py-10">Failed to load data in real-time. Check permissions or network.</p>';
+                showMessage("Data loading error.", 'error');
+            });
+        }
+
+        // --- RENDERING LOGIC ---
+
+        function renderSubmissions(submissions) {
+            if (submissions.length === 0) {
+                contentContainer.innerHTML = '<p class="text-center text-gray-500 py-10">No design questionnaires have been submitted yet.</p>';
+                return;
+            }
+
+            let html = '';
+            submissions.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt)); // Sort by newest first
+
+            submissions.forEach((data, index) => {
+                // Function to format the date
+                const submittedDate = data.submittedAt ? new Date(data.submittedAt).toLocaleString() : 'N/A';
+
+                // Check if 'Other' was selected for Vibe (Q3) and format that field
+                const vibeContent = data.brandVibe === 'Other' && data.vibeOtherDescription
+                    ? `Other: ${data.vibeOtherDescription}`
+                    : data.brandVibe || 'No Vibe Selected';
+
+                html += `
+                <div class="main-card bg-white p-6 sm:p-8 shadow-lg">
+                    <div class="flex justify-between items-start border-b border-gray-100 pb-4 mb-4">
+                        <h2 class="text-2xl font-bold text-cl-green">Submission #${submissions.length - index}</h2>
+                        <div class="text-sm text-gray-500 text-right">
+                            <p><strong>ID:</strong> ${data.id.substring(0, 8)}...</p>
+                            <p><strong>Date:</strong> ${submittedDate}</p>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+                        <!-- Left Column (General Status) -->
+                        <div>
+                            <span class="data-label">Q2: Logo Status</span>
+                            <p class="text-gray-700">${data.logoStatus || 'Not Answered'}</p>
+
+                            <span class="data-label">Q5: Typeface Direction</span>
+                            <p class="text-gray-700">${data.typefaceDirection || 'Not Answered'}</p>
+
+                            <span class="data-label">Q3: Desired Vibe</span>
+                            <p class="text-gray-700 font-semibold text-lg">${vibeContent}</p>
+                        </div>
+
+                        <!-- Right Column (Text Fields) -->
+                        <div>
+                            <span class="data-label">Q6: Inspirational Brands</span>
+                            <div class="bg-cl-light p-3 rounded-lg text-gray-700 whitespace-pre-wrap">${data.inspirationalBrands || 'None provided'}</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Full Width Answers -->
+                    <div class="mt-6 border-t pt-4">
+                        <span class="data-label">Q1: General Aesthetic/Color Description</span>
+                        <div class="bg-cl-light p-3 rounded-lg text-gray-700 whitespace-pre-wrap">${data.aestheticDescription || 'None provided'}</div>
+                    </div>
+                    
+                    <div class="mt-4">
+                        <span class="data-label">Q4: Specific Color Preferences / Avoidances</span>
+                        <div class="bg-cl-light p-3 rounded-lg text-gray-700 whitespace-pre-wrap">${data.colorPreferences || 'None provided'}</div>
+                    </div>
+                    
+                    <div class="mt-4">
+                        <span class="data-label">Q2: Logo Drafts/Links</span>
+                        <div class="bg-cl-light p-3 rounded-lg text-gray-700 whitespace-pre-wrap">${data.logoDrafts || 'None provided'}</div>
+                    </div>
+                </div>
+            `;
+            });
+
+            contentContainer.innerHTML = html;
+        }
+
+        // --- MESSAGE HANDLING (for success/error messages) ---
+
+        const msgBox = document.getElementById('message_box');
+        const msgText = document.getElementById('message_text');
+        const msgIcon = document.getElementById('message_icon');
+
+        function showMessage(message, type = 'success') {
+            const baseClasses = 'p-4 rounded-xl shadow-lg flex items-center space-x-3';
+            let iconHtml = '';
+            let colorClasses = '';
+
+            const clGreen = 'text-[#38761D] bg-[#38761D]/10 border border-[#38761D]/20';
+            const clSuccess = 'text-[#059669] bg-[#059669]/10 border border-[#059669]/20';
+
+            if (type === 'success') {
+                colorClasses = clSuccess;
+                iconHtml = '<svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path></svg>';
+            } else if (type === 'error') {
+                colorClasses = 'bg-red-100 text-red-800 border border-red-200';
+                iconHtml = '<svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path></svg>';
+            }
+
+            msgBox.querySelector('div').className = baseClasses + ' ' + colorClasses;
+            msgIcon.innerHTML = iconHtml;
+            msgText.textContent = message;
+
+            // Show message
+            msgBox.classList.remove('opacity-0', 'pointer-events-none');
+
+            // Hide after 4 seconds
+            setTimeout(() => {
+                msgBox.classList.add('opacity-0', 'pointer-events-none');
+            }, 4000);
+        }
+
+        // Initialize Firebase on load
+        initFirebaseAndAuth();
+    </script>
+</body>
+
+</html>
